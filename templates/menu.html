@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ restaurant_name }} - Table {{ table_number }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: 'Helvetica Neue', sans-serif; background: #f4f4f4; margin: 0; padding-bottom: 100px; }
+        
+        /* HEADER */
+        header { background: #2c3e50; color: white; padding: 20px; text-align: center; position: sticky; top:0; z-index: 100;}
+        h1 { margin: 0; font-size: 1.5em; }
+        .subtitle { font-size: 0.9em; opacity: 0.8; }
+
+        /* MENU GRID */
+        #menu-list { padding: 15px; max-width: 600px; margin: 0 auto; }
+        .menu-item { 
+            background: white; border-radius: 12px; padding: 15px; margin-bottom: 15px;
+            display: flex; gap: 15px; align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .item-img { width: 80px; height: 80px; border-radius: 10px; object-fit: cover; background: #eee; }
+        .item-info { flex-grow: 1; }
+        .price { font-weight: bold; color: #27ae60; display: block; margin-top: 5px;}
+        
+        /* ADD BUTTON */
+        .add-btn {
+            background: #eee; color: #333; border: none; width: 40px; height: 40px;
+            border-radius: 50%; font-size: 1.5em; cursor: pointer; transition: background 0.2s;
+        }
+        .add-btn:active { background: #ccc; transform: scale(0.9); }
+
+        /* CART BAR (Floating at bottom) */
+        #cart-bar {
+            position: fixed; bottom: -100px; left: 0; width: 100%;
+            background: white; padding: 15px; box-shadow: 0 -5px 20px rgba(0,0,0,0.1);
+            display: flex; justify-content: space-between; align-items: center;
+            transition: bottom 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 200; box-sizing: border-box;
+        }
+        #cart-bar.show { bottom: 0; }
+        
+        .cart-info { font-weight: bold; font-size: 1.1em; padding-left: 10px; }
+        .checkout-btn {
+            background: #27ae60; color: white; border: none; padding: 12px 25px;
+            border-radius: 30px; font-weight: bold; font-size: 1em; cursor: pointer;
+        }
+
+        /* ORDER MODAL (Popup) */
+        #order-modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 300;
+            justify-content: center; align-items: flex-end;
+        }
+        .modal-content {
+            background: white; width: 100%; max-width: 600px; border-radius: 20px 20px 0 0;
+            padding: 25px; box-sizing: border-box; animation: slideUp 0.3s;
+        }
+        @keyframes slideUp { from {transform: translateY(100%)} to {transform: translateY(0)} }
+        
+        .cart-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+        .btn-full { flex: 1; padding: 15px; border-radius: 10px; border: none; font-weight: bold; font-size: 1em; }
+        .btn-cancel { background: #eee; color: #333; }
+        .btn-confirm { background: #27ae60; color: white; }
+
+        /* NOTIFICATION */
+        #status-bar {
+            position: fixed; top: -100px; left: 0; width: 100%;
+            background: #27ae60; color: white; padding: 15px; text-align: center;
+            font-weight: bold; transition: top 0.5s; z-index: 400;
+        }
+    </style>
+</head>
+<body>
+
+<div id="status-bar">🍽️ Order Ready! Pickup at Counter.</div>
+
+<header>
+    <h1>{{ restaurant_name }}</h1>
+    <div class="subtitle">Table #{{ table_number }}</div>
+</header>
+
+<div id="menu-list">Loading Menu...</div>
+
+<div id="cart-bar">
+    <div class="cart-info">
+        <span id="cart-count">0</span> Items 
+        <span style="font-weight:normal; color:#666"> | </span> 
+        $<span id="cart-total">0.00</span>
+    </div>
+    <button class="checkout-btn" onclick="openModal()">View Order</button>
+</div>
+
+<div id="order-modal">
+    <div class="modal-content">
+        <h2>Your Order</h2>
+        <div id="cart-items-list"></div>
+        <div class="modal-actions">
+            <button class="btn-full btn-cancel" onclick="closeModal()">Add More</button>
+            <button class="btn-full btn-confirm" onclick="submitOrder()">Place Order</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const RESTAURANT_ID = {{ restaurant_id }};
+    const TABLE_NUMBER = {{ table_number }};
+    const HOST = window.location.host; 
+    const PROTOCOL = window.location.protocol;
+    const WS_PROTOCOL = (PROTOCOL === 'https:') ? 'wss:' : 'ws:';
+    
+    // --- CART LOGIC ---
+    let cart = []; // Stores the items: [{id: 101, name: "Latte", price: 4.5}]
+
+    function addToCart(id, name, price) {
+        cart.push({id, name, price});
+        updateCartUI();
+        // Little vibration feedback
+        if(navigator.vibrate) navigator.vibrate(50);
+    }
+
+    function updateCartUI() {
+        // 1. Update text
+        document.getElementById('cart-count').innerText = cart.length;
+        
+        let total = cart.reduce((sum, item) => sum + item.price, 0);
+        document.getElementById('cart-total').innerText = total.toFixed(2);
+
+        // 2. Show/Hide Bar
+        const bar = document.getElementById('cart-bar');
+        if (cart.length > 0) bar.classList.add('show');
+        else bar.classList.remove('show');
+    }
+
+    function openModal() {
+        const list = document.getElementById('cart-items-list');
+        list.innerHTML = '';
+        
+        // Group items (e.g. "2x Latte")
+        let counts = {};
+        cart.forEach(x => { counts[x.name] = (counts[x.name] || 0) + 1; });
+
+        for (let [name, count] of Object.entries(counts)) {
+            list.innerHTML += `<div class="cart-item"><span>${count}x ${name}</span></div>`;
+        }
+        
+        document.getElementById('order-modal').style.display = 'flex';
+    }
+
+    function closeModal() {
+        document.getElementById('order-modal').style.display = 'none';
+    }
+
+    // --- API & WEBSOCKETS ---
+    
+    async function submitOrder() {
+        if (cart.length === 0) return;
+
+        // Convert simple cart list to Server Format: [{item_id: 101, quantity: 2}]
+        let orderItems = {};
+        cart.forEach(item => {
+            if (!orderItems[item.id]) orderItems[item.id] = 0;
+            orderItems[item.id]++;
+        });
+
+        let finalItems = Object.keys(orderItems).map(key => ({
+            item_id: parseInt(key),
+            quantity: orderItems[key]
+        }));
+
+        // Send to Server
+        await fetch(`${PROTOCOL}//${HOST}/api/order/${RESTAURANT_ID}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                "table_number": TABLE_NUMBER, 
+                "items": finalItems 
+            })
+        });
+
+        // Reset
+        cart = [];
+        updateCartUI();
+        closeModal();
+        alert("✅ Order Sent to Kitchen!");
+    }
+
+    async function loadMenu() {
+        const response = await fetch(`${PROTOCOL}//${HOST}/api/menu/${RESTAURANT_ID}`);
+        const data = await response.json();
+        const list = document.getElementById('menu-list');
+        list.innerHTML = '';
+
+        data.menu.forEach(item => {
+            let img = item.image_url || "https://placehold.co/100x100";
+            list.innerHTML += `
+                <div class="menu-item">
+                    <img src="${img}" class="item-img">
+                    <div class="item-info">
+                        <h3>${item.name}</h3>
+                        <p style="color:#777; font-size:0.9em;">${item.description}</p>
+                        <span class="price">$${item.price.toFixed(2)}</span>
+                    </div>
+                    <button class="add-btn" onclick="addToCart(${item.id}, '${item.name}', ${item.price})">+</button>
+                </div>`;
+        });
+    }
+
+    // WebSocket for "Ready" alerts
+    const ws = new WebSocket(`${WS_PROTOCOL}//${HOST}/ws/customer/${TABLE_NUMBER}`);
+    ws.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        if (data.event === "ORDER_READY") {
+            const bar = document.getElementById('status-bar');
+            bar.style.top = "0"; // Slide down
+            if(navigator.vibrate) navigator.vibrate([200, 100, 200]);
+            setTimeout(() => { bar.style.top = "-100px"; }, 5000); // Hide after 5s
+        }
+    };
+
+    loadMenu();
+</script>
+</body>
+</html>

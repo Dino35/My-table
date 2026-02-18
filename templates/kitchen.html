@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Kitchen Display - Restaurant 1</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; padding: 20px; background-color: #f4f7f6; }
+        h1 { color: #2c3e50; }
+        
+        /* --- Order Card Styles --- */
+        .order-card { 
+            background: white; 
+            border-left: 10px solid #e74c3c; /* RED = Cooking */
+            padding: 20px; 
+            margin-bottom: 20px; 
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+            transition: all 0.3s ease;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        /* GREEN = Ready */
+        .order-card.ready {
+            border-left: 10px solid #2ecc71;
+            background-color: #eafaf1; /* Light green background */
+            opacity: 0.8;
+        }
+        
+        .order-header { display: flex; justify-content: space-between; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
+        .table-number { font-size: 1.5em; font-weight: bold; color: #2c3e50; }
+        .time { color: #7f8c8d; }
+        
+        ul { list-style: none; padding: 0; }
+        li { font-size: 1.3em; margin-bottom: 5px; }
+        .qty { font-weight: bold; color: #e74c3c; margin-right: 10px; }
+        
+        /* The Action Button */
+        .action-btn {
+            width: 100%;
+            padding: 10px;
+            font-size: 1.2em;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background-color: #34495e;
+            color: white;
+            transition: background 0.2s;
+        }
+        .action-btn:hover { background-color: #2c3e50; }
+        
+        /* Style for the button when order is ready */
+        .ready .action-btn {
+            background-color: #27ae60;
+            cursor: default;
+        }
+
+        @keyframes slideIn { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+
+    <h1>👨‍🍳 Kitchen Display (Restaurant #1)</h1>
+    
+    <button onclick="enableAudio()" style="background:#eee; border:none; padding:5px; margin-bottom:10px;">🔊 Enable Audio</button>
+    
+    <div id="orders">
+        <p><i>Waiting for new orders...</i></p>
+    </div>
+
+    <audio id="sound-new" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg"></audio>
+    <audio id="sound-ready" src="https://actions.google.com/sounds/v1/cartoon/clank_car_crash.ogg"></audio> 
+    <script>
+        // 1. Get ID from the URL (Injected by Python)
+        const RESTAURANT_ID = {{ restaurant_id }};
+        let menuMap = {}; 
+
+        // 2. DYNAMIC HOST DETECTION (Works on Localhost AND Website.com)
+        const HOST = window.location.host; 
+        const HTTP_PROTOCOL = window.location.protocol;
+        const WS_PROTOCOL = (HTTP_PROTOCOL === 'https:') ? 'wss:' : 'ws:';
+
+        // 3. Load Menu (Use Dynamic URL)
+        async function loadMenu() {
+            try {
+                const response = await fetch(`${HTTP_PROTOCOL}//${HOST}/api/menu/${RESTAURANT_ID}`);
+                const data = await response.json();
+                data.menu.forEach(item => { menuMap[item.id] = item.name; });
+            } catch (error) { console.error("Error loading menu:", error); }
+        }
+
+        // 4. Connect WebSocket (Use Dynamic URL)
+        var ws = new WebSocket(`${WS_PROTOCOL}//${HOST}/ws/kitchen/${RESTAURANT_ID}`);
+
+        ws.onmessage = function(event) {
+            var data = JSON.parse(event.data);
+            var ordersDiv = document.getElementById('orders');
+            
+            if (ordersDiv.innerText.includes("Waiting for new orders...")) ordersDiv.innerHTML = "";
+
+            playSound('sound-new');
+
+            let itemsHtml = "";
+            data.items.forEach(item => {
+                let name = menuMap[item.item_id] || "Item #" + item.item_id;
+                itemsHtml += `<li><span class="qty">${item.quantity}x</span> ${name}</li>`;
+            });
+
+            let time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            let ticketId = "ticket-" + Date.now();
+            
+            var newTicket = `
+                <div class="order-card" id="${ticketId}">
+                    <div class="order-header">
+                        <span class="table-number">Table ${data.table}</span>
+                        <span class="time">${time}</span>
+                    </div>
+                    <ul>${itemsHtml}</ul>
+                    <button class="action-btn" onclick="markReady('${ticketId}', ${data.table})">✅ Mark Ready to Serve</button>
+                </div>
+            `;
+            
+            ordersDiv.innerHTML = newTicket + ordersDiv.innerHTML;
+        };
+
+        async function markReady(ticketId, tableNumber) {
+            var card = document.getElementById(ticketId);
+            var btn = card.querySelector('.action-btn');
+
+            card.classList.add('ready');
+            btn.innerText = "🍽️ Notified Customer";
+            btn.disabled = true;
+            
+            playSound('sound-ready');
+
+            // 5. Send "Ready" Signal (Use Dynamic URL)
+            try {
+                await fetch(`${HTTP_PROTOCOL}//${HOST}/api/kitchen/ready/${RESTAURANT_ID}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ "table_number": tableNumber, "status": "READY" })
+                });
+            } catch (err) { console.error("Failed to notify customer:", err); }
+        }
+
+        function playSound(id) {
+            var audio = document.getElementById(id);
+            if(audio) {
+                audio.currentTime = 0;
+                audio.play().catch(e => console.log("Audio blocked. Click 'Enable Audio'."));
+            }
+        }
+        
+        function enableAudio() {
+            document.getElementById('sound-new').play().then(()=>document.getElementById('sound-new').pause());
+        }
+
+        loadMenu();
+    </script>
+</body>
+</html>
