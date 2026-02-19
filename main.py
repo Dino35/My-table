@@ -6,43 +6,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
-from typing import List, Optional
-from sqlalchemy import create_engine, Column, Integer, String, Float
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session
 
-# --- 1. DATABASE SETUP ---
-SQLALCHEMY_DATABASE_URL = "sqlite:///./restaurant.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# --- IMPORT DATABASE STUFF FROM OUR NEW FILE ---
+from models import SessionLocal, DBMenuItem, MenuItemCreate, OrderItem, Order, OrderStatus
 
-class DBMenuItem(Base):
-    __tablename__ = "menu_items"
-    id = Column(Integer, primary_key=True, index=True)
-    restaurant_id = Column(Integer, index=True)
-    name = Column(String, index=True)
-    price = Column(Float)
-    description = Column(String)
-    image_url = Column(String)
-
-Base.metadata.create_all(bind=engine)
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# --- 2. FASTAPI SETUP ---
+# --- 1. FASTAPI SETUP ---
 app = FastAPI()
 
-# MOUNT STATIC FOLDER (Crucial for images)
 os.makedirs("static/images", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
 templates = Jinja2Templates(directory="templates")
 
 app.add_middleware(
@@ -52,6 +25,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- 2. DATABASE DEPENDENCY ---
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 # --- 3. WEBSOCKET MANAGERS ---
 class ConnectionManager:
@@ -71,26 +52,7 @@ class ConnectionManager:
 kitchen_manager = ConnectionManager()
 customer_manager = ConnectionManager()
 
-# --- 4. DATA MODELS ---
-class MenuItemCreate(BaseModel):
-    name: str
-    price: float
-    description: str
-    image_url: Optional[str] = "https://placehold.co/100x100"
-
-class OrderItem(BaseModel):
-    item_id: int
-    quantity: int
-
-class Order(BaseModel):
-    table_number: int
-    items: List[OrderItem]
-
-class OrderStatus(BaseModel):
-    table_number: int
-    status: str
-
-# --- 5. STARTUP (Seed Data) ---
+# --- 4. STARTUP (Seed Data) ---
 @app.on_event("startup")
 def startup_event():
     db = SessionLocal()
@@ -104,9 +66,7 @@ def startup_event():
         db.commit()
     db.close()
 
-# --- 6. API ENDPOINTS ---
-
-# IMAGE UPLOAD (This was missing!)
+# --- 5. API ENDPOINTS ---
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
     file_extension = file.filename.split(".")[-1]
@@ -154,7 +114,7 @@ async def mark_ready(restaurant_id: int, status: OrderStatus):
     }, str(status.table_number))
     return {"status": "notified"}
 
-# --- 7. WEBSOCKETS ---
+# --- 6. WEBSOCKETS ---
 @app.websocket("/ws/kitchen/{restaurant_id}")
 async def kitchen_ws(websocket: WebSocket, restaurant_id: int):
     await kitchen_manager.connect(websocket, str(restaurant_id))
@@ -171,7 +131,7 @@ async def customer_ws(websocket: WebSocket, table_number: int):
     except WebSocketDisconnect:
         customer_manager.disconnect(websocket, str(table_number))
 
-# --- 8. HTML PAGES (Correct Order) ---
+# --- 7. HTML PAGES ---
 @app.get("/kitchen/{restaurant_id}", response_class=HTMLResponse)
 async def serve_kitchen(request: Request, restaurant_id: int):
     return templates.TemplateResponse("kitchen.html", {"request": request, "restaurant_id": restaurant_id})
@@ -180,7 +140,6 @@ async def serve_kitchen(request: Request, restaurant_id: int):
 async def serve_admin(request: Request, restaurant_id: int):
     return templates.TemplateResponse("admin.html", {"request": request, "restaurant_id": restaurant_id})
 
-# Catch-All MUST be last
 @app.get("/{restaurant_name}/{table_number}", response_class=HTMLResponse)
 async def serve_menu(request: Request, restaurant_name: str, table_number: int):
     return templates.TemplateResponse("menu.html", {"request": request, "restaurant_id": 1, "restaurant_name": restaurant_name, "table_number": table_number})
