@@ -7,11 +7,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
-# --- IMPORT DATABASE STUFF FROM OUR NEW FILE ---
-from models import SessionLocal, DBMenuItem, MenuItemCreate, OrderItem, Order, OrderStatus
+# Import our new Restaurant database models!
+from models import SessionLocal, DBMenuItem, DBRestaurant, MenuItemCreate, OrderItem, Order, OrderStatus
 
-# --- 1. FASTAPI SETUP ---
 app = FastAPI()
 
 os.makedirs("static/images", exist_ok=True)
@@ -26,7 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 2. DATABASE DEPENDENCY ---
 def get_db():
     db = SessionLocal()
     try:
@@ -34,7 +33,7 @@ def get_db():
     finally:
         db.close()
 
-# --- 3. WEBSOCKET MANAGERS ---
+# --- WEBSOCKET MANAGERS ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict = {}
@@ -52,30 +51,55 @@ class ConnectionManager:
 kitchen_manager = ConnectionManager()
 customer_manager = ConnectionManager()
 
-# --- 4. STARTUP (Seed Data) ---
+# --- NEW: RESTAURANT SCHEMAS ---
+class RestaurantCreate(BaseModel):
+    name: str
+    passcode: str
+
+# --- STARTUP (Seed Data) ---
 @app.on_event("startup")
 def startup_event():
     db = SessionLocal()
-    if db.query(DBMenuItem).count() == 0:
-        defaults = [
-            DBMenuItem(restaurant_id=1, name="Latte", price=4.50, description="Oat milk base", image_url="https://images.unsplash.com/photo-1541167760496-1628856ab772?w=200"),
-            DBMenuItem(restaurant_id=1, name="Croissant", price=3.00, description="Freshly baked", image_url="https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=200"),
-            DBMenuItem(restaurant_id=1, name="Espresso", price=2.50, description="Double shot", image_url="https://images.unsplash.com/photo-1510591509098-f4fdc6d0ff04?w=200")
-        ]
-        db.add_all(defaults)
+    
+    # 1. Create the Default Restaurant if it doesn't exist
+    if db.query(DBRestaurant).count() == 0:
+        default_restaurant = DBRestaurant(name="GeminiCoffee", passcode="1234")
+        db.add(default_restaurant)
         db.commit()
+        db.refresh(default_restaurant)
+        
+        # 2. Add default menu items to THIS specific restaurant
+        if db.query(DBMenuItem).count() == 0:
+            defaults = [
+                DBMenuItem(restaurant_id=default_restaurant.id, name="Latte", price=4.50, description="Oat milk base", image_url="https://images.unsplash.com/photo-1541167760496-1628856ab772?w=200"),
+                DBMenuItem(restaurant_id=default_restaurant.id, name="Croissant", price=3.00, description="Freshly baked", image_url="https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=200")
+            ]
+            db.add_all(defaults)
+            db.commit()
     db.close()
 
-# --- 5. API ENDPOINTS ---
+# --- API ENDPOINTS ---
+
+# NEW: Register a new restaurant!
+@app.post("/api/restaurants/register")
+async def register_restaurant(restaurant: RestaurantCreate, db: Session = Depends(get_db)):
+    existing = db.query(DBRestaurant).filter(DBRestaurant.name == restaurant.name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Restaurant name already taken")
+    
+    new_restaurant = DBRestaurant(name=restaurant.name, passcode=restaurant.passcode)
+    db.add(new_restaurant)
+    db.commit()
+    db.refresh(new_restaurant)
+    return {"message": "Success!", "restaurant_id": new_restaurant.id, "name": new_restaurant.name}
+
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
     file_extension = file.filename.split(".")[-1]
     unique_filename = f"{uuid.uuid4()}.{file_extension}"
     file_path = f"static/images/{unique_filename}"
-    
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-        
     return {"url": f"/static/images/{unique_filename}"}
 
 @app.get("/api/menu/{restaurant_id}")
@@ -114,7 +138,7 @@ async def mark_ready(restaurant_id: int, status: OrderStatus):
     }, str(status.table_number))
     return {"status": "notified"}
 
-# --- 6. WEBSOCKETS ---
+# --- WEBSOCKETS ---
 @app.websocket("/ws/kitchen/{restaurant_id}")
 async def kitchen_ws(websocket: WebSocket, restaurant_id: int):
     await kitchen_manager.connect(websocket, str(restaurant_id))
@@ -131,7 +155,7 @@ async def customer_ws(websocket: WebSocket, table_number: int):
     except WebSocketDisconnect:
         customer_manager.disconnect(websocket, str(table_number))
 
-# --- 7. HTML PAGES ---
+# --- HTML PAGES ---
 @app.get("/kitchen/{restaurant_id}", response_class=HTMLResponse)
 async def serve_kitchen(request: Request, restaurant_id: int):
     return templates.TemplateResponse("kitchen.html", {"request": request, "restaurant_id": restaurant_id})
@@ -140,6 +164,16 @@ async def serve_kitchen(request: Request, restaurant_id: int):
 async def serve_admin(request: Request, restaurant_id: int):
     return templates.TemplateResponse("admin.html", {"request": request, "restaurant_id": restaurant_id})
 
+# THE SMART DOORWAY
 @app.get("/{restaurant_name}/{table_number}", response_class=HTMLResponse)
 async def serve_menu(request: Request, restaurant_name: str, table_number: int):
-    return templates.TemplateResponse("menu.html", {"request": request, "restaurant_id": 1, "restaurant_name": restaurant_name, "table_number": table_number})
+    db = SessionLocal()
+    
+    # Check if the restaurant actually exists in the database
+    restaurant = db.query(DBRestaurant).filter(DBRestaurant.name == restaurant_name).first()
+    db.close()
+    
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found! Did you type the name correctly?")
+        
+    return templates.TemplateResponse("menu.html", {"request": request, "restaurant_id": restaurant.id, "restaurant_name": restaurant.name, "table_number": table_number})
