@@ -5,8 +5,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 # --- 1. DATABASE SETUP ---
-SQLALCHEMY_DATABASE_URL = "sqlite:///./restaurant.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SQLALCHEMY_DATABASE_URL = "postgresql://neondb_owner:npg_S5cRnYbokH4e@ep-mute-mode-ai4kk1r3-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
