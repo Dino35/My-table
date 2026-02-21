@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manager Dashboard</title>
+    <title>Manager Login</title>
     <style>
         body { font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;}
         .item { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; display: flex; align-items: center; gap: 15px; border-radius: 8px;}
@@ -12,28 +12,65 @@
         input, button { padding: 10px; border-radius: 4px; border: 1px solid #ccc; }
         button { background: #28a745; color: white; border: none; cursor: pointer; font-weight: bold;}
         button:hover { background: #218838; }
+        #loginScreen { text-align: center; margin-top: 50px; }
     </style>
 </head>
 <body>
-    <h1>Manager Dashboard</h1>
-    <p>Managing Restaurant ID: <strong>{{ restaurant_id }}</strong></p>
+    
+    <div id="loginScreen">
+        <h1>Manager Login</h1>
+        <p>Restaurant ID: <strong>{{ restaurant_id }}</strong></p>
+        <form id="loginForm">
+            <input type="password" id="passcodeInput" placeholder="Enter your Passcode" required>
+            <button type="submit">Unlock Dashboard</button>
+        </form>
+        <p id="errorMessage" style="color: red; display: none;">Incorrect passcode!</p>
+    </div>
 
-    <h3>Add New Menu Item</h3>
-    <form id="addItemForm">
-        <input type="text" id="name" placeholder="Item Name (e.g., Double Cheeseburger)" required>
-        <input type="number" id="price" placeholder="Price (e.g., 8.99)" step="0.01" required>
-        <input type="text" id="description" placeholder="Description" required>
-        <input type="file" id="imageFile" accept="image/*" required>
-        <button type="submit" id="submitBtn">Add Item to Menu</button>
-    </form>
+    <div id="dashboard" style="display: none;">
+        <h1>Manager Dashboard</h1>
+        <p>Managing Restaurant ID: <strong>{{ restaurant_id }}</strong></p>
 
-    <h3>Current Menu</h3>
-    <div id="menuContainer"></div>
+        <h3>Add New Menu Item</h3>
+        <form id="addItemForm">
+            <input type="text" id="name" placeholder="Item Name (e.g., Double Cheeseburger)" required>
+            <input type="number" id="price" placeholder="Price (e.g., 8.99)" step="0.01" required>
+            <input type="text" id="description" placeholder="Description" required>
+            <input type="file" id="imageFile" accept="image/*" required>
+            <button type="submit" id="submitBtn">Add Item to Menu</button>
+        </form>
+
+        <h3>Current Menu</h3>
+        <div id="menuContainer"></div>
+    </div>
 
     <script>
-        // The server drops the dynamic ID right here!
         const restaurantId = {{ restaurant_id }};
 
+        // --- NEW: LOGIN LOGIC ---
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const passcode = document.getElementById('passcodeInput').value;
+            
+            // Ask the Python server if the passcode is correct
+            const response = await fetch(`/api/restaurants/${restaurantId}/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ passcode: passcode })
+            });
+
+            if (response.ok) {
+                // Success! Hide the lobby, show the dashboard, and load the menu
+                document.getElementById('loginScreen').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'block';
+                loadMenu();
+            } else {
+                // Failed! Show the red error message
+                document.getElementById('errorMessage').style.display = 'block';
+            }
+        });
+
+        // --- EXISTING MENU LOGIC ---
         async function loadMenu() {
             const response = await fetch(`/api/menu/${restaurantId}`);
             const data = await response.json();
@@ -63,7 +100,6 @@
             btn.innerText = "Uploading...";
             btn.disabled = true;
 
-            // 1. Upload Image
             const fileInput = document.getElementById('imageFile');
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
@@ -71,7 +107,6 @@
             const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
             const uploadData = await uploadRes.json();
 
-            // 2. Save Item to this specific restaurant
             const newItem = {
                 name: document.getElementById('name').value,
                 price: parseFloat(document.getElementById('price').value),
@@ -90,9 +125,6 @@
             btn.disabled = false;
             loadMenu();
         });
-
-        // Load the menu when the page opens
-        loadMenu();
     </script>
 </body>
 </html>
