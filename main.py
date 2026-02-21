@@ -108,6 +108,7 @@ async def login_restaurant(restaurant_id: int, req: LoginRequest, db: Session = 
         
     return {"status": "success"}
 
+
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
     file_extension = file.filename.split(".")[-1]
@@ -135,7 +136,17 @@ async def add_menu_item(restaurant_id: int, item: MenuItemCreate, db: Session = 
     db.commit()
     db.refresh(new_db_item)
     return new_db_item
-
+@app.delete("/api/menu/{restaurant_id}/item/{item_id}")
+async def delete_menu_item(restaurant_id: int, item_id: int, db: Session = Depends(get_db)):
+    # Find the specific item for this specific restaurant
+    item = db.query(DBMenuItem).filter(DBMenuItem.id == item_id, DBMenuItem.restaurant_id == restaurant_id).first()
+    
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+        
+    db.delete(item)
+    db.commit()
+    return {"status": "success", "message": "Item deleted"}
 @app.post("/api/order/{restaurant_id}")
 async def place_order(restaurant_id: int, order: Order):
     await kitchen_manager.broadcast({
