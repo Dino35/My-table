@@ -55,6 +55,12 @@ customer_manager = ConnectionManager()
 class RestaurantCreate(BaseModel):
     name: str
     passcode: str
+class RestaurantCreate(BaseModel):
+    name: str
+    passcode: str
+
+class LoginRequest(BaseModel):
+    passcode: str    
 
 # --- STARTUP (Seed Data) ---
 @app.on_event("startup")
@@ -92,6 +98,15 @@ async def register_restaurant(restaurant: RestaurantCreate, db: Session = Depend
     db.commit()
     db.refresh(new_restaurant)
     return {"message": "Success!", "restaurant_id": new_restaurant.id, "name": new_restaurant.name}
+@app.post("/api/restaurants/{restaurant_id}/login")
+async def login_restaurant(restaurant_id: int, req: LoginRequest, db: Session = Depends(get_db)):
+    restaurant = db.query(DBRestaurant).filter(DBRestaurant.id == restaurant_id).first()
+    
+    # Check if the restaurant exists, and if the passcode matches
+    if not restaurant or restaurant.passcode != req.passcode:
+        raise HTTPException(status_code=401, detail="Invalid passcode")
+        
+    return {"status": "success"}
 
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
